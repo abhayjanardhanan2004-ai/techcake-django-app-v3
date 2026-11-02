@@ -44,3 +44,7 @@ class HealthCheckTests(TestCase):
             response = self.client.get("/health")
         self.assertEqual(response.status_code, 503)
         self.assertEqual(response.json()["database"], "unreachable")
+
+
+    def test_ci_failure_demo(self):
+        self.fail("CI/CD branch protection demo - intentional failure")
