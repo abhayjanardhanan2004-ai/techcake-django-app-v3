@@ -1,5 +1,4 @@
-
-name: Django CI-CD
+name: Django CI-CD with Trivy
 
 on:
   pull_request:
@@ -28,41 +27,77 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: |
-          pip install -r requirements.txt
+        run: pip install -r requirements.txt
 
       - name: Run Django tests
         env:
           DB_ENGINE: sqlite
-        run: |
-          python manage.py test
+        run: python manage.py test
 
-  build-pr:
-    name: Build Docker image (PR only)
-    needs: test
-    if: github.event_name == 'pull_request'
+  build-scan:
+    name: Build and scan Docker image
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Initialize scan report
+        run: |
+          echo '{"status":"scan_not_completed"}' > trivy-report.json
 
       - name: Build Docker image
-        uses: docker/build-push-action@v6
+        run: |
+          docker build \
+            --build-arg APP_VERSION=${{ github.sha }} \
+            -t techcake-v3:${{ github.sha }} .
+
+      - name: Run Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
         with:
-          context: .
-          push: false
-          tags: techcake-v3:${{ github.sha }}
-          build-args: |
-            APP_VERSION=${{ github.sha }}
+          image-ref: techcake-v3:${{ github.sha }}
+          format: json
+          output: trivy-report.json
+          severity: HIGH,CRITICAL
+          exit-code: '0'
+
+      - name: Upload Trivy scan report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: trivy-scan-report-${{ github.sha }}
+          path: trivy-report.json
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Block CRITICAL vulnerabilities
+        run: |
+          if jq -e '[.Results[]?.Vulnerabilities[]? | select(.Severity == "CRITICAL")] | length == 0' trivy-report.json >/dev/null; then
+            echo "PASS: No CRITICAL vulnerabilities found"
+          else
+            echo "FAIL: CRITICAL vulnerabilities detected"
+            exit 1
+          fi
+
+      - name: Save scanned Docker image
+        run: |
+          docker save -o image.tar techcake-v3:${{ github.sha }}
+
+      - name: Upload scanned Docker image
+        uses: actions/upload-artifact@v4
+        with:
+          name: scanned-image-${{ github.sha }}
+          path: image.tar
+          retention-days: 1
 
   publish-main:
-    name: Build and push to ECR
-    needs: test
+    name: Push scanned image to ECR
+    needs:
+      - test
+      - build-scan
+
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
     runs-on: ubuntu-latest
 
     permissions:
@@ -70,8 +105,14 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
+      - name: Download scanned image
+        uses: actions/download-artifact@v4
+        with:
+          name: scanned-image-${{ github.sha }}
+          path: ./image-artifact
+
+      - name: Load scanned Docker image
+        run: docker load -i image-artifact/image.tar
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -80,17 +121,15 @@ jobs:
           aws-region: ap-south-1
 
       - name: Login to Amazon ECR
-        id: login-ecr
         uses: aws-actions/amazon-ecr-login@v2
 
-      - name: Setup Docker Buildx
-        uses: docker/setup-buildx-action@v3
+      - name: Tag scanned image for ECR
+        run: |
+          docker tag techcake-v3:${{ github.sha }} \
+            451782721864.dkr.ecr.ap-south-1.amazonaws.com/techcake-django-app-v3:${{ github.sha }}
 
-      - name: Build and push Docker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          push: true
-          tags: 451782721864.dkr.ecr.ap-south-1.amazonaws.com/techcake-django-app-v3:${{ github.sha }}
-          build-args: |
-            APP_VERSION=${{ github.sha }}
+      - name: Push scanned image to ECR
+        run: |
+          docker push \
+            451782721864.dkr.ecr.ap-south-1.amazonaws.com/techcake-django-app-v3:${{ github.sha }}
+
