@@ -133,3 +133,75 @@ jobs:
           docker push \
             451782721864.dkr.ecr.ap-south-1.amazonaws.com/techcake-django-app-v3:${{ github.sha }}
 
+  deploy:
+    name: Deploy to EC2 using AWS SSM
+    needs: publish-main
+
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      id-token: write
+
+    steps:
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: arn:aws:iam::451782721864:role/GitHubActionsECRPushRole
+          aws-region: ap-south-1
+
+      - name: Deploy image through SSM
+        run: |
+          set -e
+
+          INSTANCE_ID="i-0a02822ba092a1f34"
+          DEPLOY_COMMAND="sudo /opt/django1/techcake-django-app-v2/deploy.sh ${GITHUB_SHA}"
+
+          echo "Sending deployment command to EC2..."
+
+          PARAMETERS=$(jq -n --arg cmd "$DEPLOY_COMMAND" '{commands: [$cmd]}')
+
+          COMMAND_ID=$(aws ssm send-command \
+            --instance-ids "$INSTANCE_ID" \
+            --document-name "AWS-RunShellScript" \
+            --parameters "$PARAMETERS" \
+            --comment "Deploy Django image ${GITHUB_SHA}" \
+            --query "Command.CommandId" \
+            --output text)
+
+          echo "SSM Command ID: $COMMAND_ID"
+
+          for attempt in $(seq 1 60); do
+            STATUS=$(aws ssm get-command-invocation \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$INSTANCE_ID" \
+              --query "Status" \
+              --output text 2>/dev/null || echo "Pending")
+
+            echo "Deployment status: $STATUS"
+
+            if [ "$STATUS" = "Success" ]; then
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --query "StandardOutputContent" \
+                --output text
+              exit 0
+            fi
+
+            if [[ "$STATUS" == "Failed" || "$STATUS" == "Cancelled" || "$STATUS" == "TimedOut" || "$STATUS" == "DeliveryTimedOut" || "$STATUS" == "ExecutionTimedOut" ]]; then
+              aws ssm get-command-invocation \
+                --command-id "$COMMAND_ID" \
+                --instance-id "$INSTANCE_ID" \
+                --output json
+              exit 1
+            fi
+
+            sleep 5
+          done
+
+          echo "ERROR: Deployment timed out."
+          exit 1
+
