@@ -81,18 +81,32 @@ if os.environ.get("DB_ENGINE", "mysql").lower() == "sqlite":
         }
     }
 else:
+   # --- Database -------------------------------------------------------
+# --- Database -------------------------------------------------------
+DB_ENGINE = os.environ.get("DB_ENGINE", "sqlite").lower()
+
+if DB_ENGINE == "mysql":
     DATABASES = {
         "default": {
             "ENGINE": "django.db.backends.mysql",
             "NAME": os.environ.get("DB_NAME", "django1"),
             "USER": os.environ.get("DB_USER", "django1_user"),
             "PASSWORD": os.environ.get("DB_PASSWORD", ""),
-            "HOST": os.environ.get("DB_HOST", "127.0.0.1"),  # your RDS endpoint
+            "HOST": os.environ.get("DB_HOST", "127.0.0.1"),
             "PORT": os.environ.get("DB_PORT", "3306"),
             "OPTIONS": {"charset": "utf8mb4"},
         }
     }
-
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.environ.get(
+                "SQLITE_DB_PATH",
+                str(BASE_DIR / "db.sqlite3")
+            ),
+        }
+    }
 # --- Release version -------------------------------------------------
 # Set by your pipeline (e.g. the git commit SHA) so the running app can prove
 # exactly which build it is. Shown on the home page and returned by /health.
