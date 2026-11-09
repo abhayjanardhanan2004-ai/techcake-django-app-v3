@@ -152,6 +152,25 @@ jobs:
           role-to-assume: arn:aws:iam::451782721864:role/GitHubActionsECRPushRole
           aws-region: ap-south-1
 
+      - name: Verify AWS account and EC2 registration
+        run: |
+          echo "Checking AWS identity..."
+          aws sts get-caller-identity
+
+          echo "Checking EC2 instance..."
+          aws ec2 describe-instances \
+            --region ap-south-1 \
+            --instance-ids i-0a02822ba092a1f34 \
+            --query "Reservations[].Instances[].{InstanceId:InstanceId,State:State.Name}" \
+            --output table
+
+          echo "Checking SSM registration..."
+          aws ssm describe-instance-information \
+            --region ap-south-1 \
+            --filters "Key=InstanceIds,Values=i-0a02822ba092a1f34" \
+            --query "InstanceInformationList[].{InstanceId:InstanceId,PingStatus:PingStatus}" \
+            --output table
+
       - name: Deploy image through SSM
         run: |
           set -e
