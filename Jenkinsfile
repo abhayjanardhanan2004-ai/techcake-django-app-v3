@@ -257,13 +257,4 @@ post {
     }
 }
 
-   
-            echo 'CI/CD pipeline completed successfully!'
-        }
-
-        failure {
-            echo 'Pipeline failed. Push and deployment stages are skipped when earlier stages fail.'
-        }
-    }
-}
 
