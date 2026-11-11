@@ -1,9 +1,5 @@
 
-
-
-            archiveArtifacts(
-                artifacts: 'trivy-report.json',
-                allowEmptyArchive: truepipeline {
+pipeline {
     agent any
 
     options {
@@ -22,6 +18,7 @@
     }
 
     stages {
+
         stage('Checkout') {
             steps {
                 checkout scm
@@ -127,14 +124,14 @@ PY
             }
         }
 
-stage('Deploy') {
-    steps {
-        sh '''
-            set -eu
+        stage('Deploy') {
+            steps {
+                sh '''
+                    set -eu
 
-            echo "Deploying commit: $GIT_SHA"
+                    echo "Deploying commit: $GIT_SHA"
 
-            python3.11 - <<'PY'
+                    python3.11 - <<'PY'
 import json
 import os
 
@@ -147,62 +144,60 @@ with open("ssm-parameters.json", "w") as f:
     json.dump({"commands": [command]}, f)
 PY
 
-            COMMAND_ID=$(/usr/local/bin/aws ssm send-command \
-              --region "$AWS_REGION" \
-              --instance-ids "$APP_INSTANCE_ID" \
-              --document-name AWS-RunShellScript \
-              --parameters file://ssm-parameters.json \
-              --query 'Command.CommandId' \
-              --output text)
+                    COMMAND_ID=$(/usr/local/bin/aws ssm send-command \
+                      --region "$AWS_REGION" \
+                      --instance-ids "$APP_INSTANCE_ID" \
+                      --document-name AWS-RunShellScript \
+                      --parameters file://ssm-parameters.json \
+                      --query 'Command.CommandId' \
+                      --output text)
 
-            echo "SSM Command ID: $COMMAND_ID"
+                    echo "SSM Command ID: $COMMAND_ID"
 
-            STATUS="Pending"
+                    STATUS="Pending"
 
-            for attempt in $(seq 1 180); do
-                STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
-                  --region "$AWS_REGION" \
-                  --command-id "$COMMAND_ID" \
-                  --instance-id "$APP_INSTANCE_ID" \
-                  --query 'Status' \
-                  --output text 2>/dev/null || true)
+                    for attempt in $(seq 1 180); do
+                        STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
+                          --region "$AWS_REGION" \
+                          --command-id "$COMMAND_ID" \
+                          --instance-id "$APP_INSTANCE_ID" \
+                          --query 'Status' \
+                          --output text 2>/dev/null || true)
 
-                echo "Deployment status: $STATUS"
+                        echo "Deployment status: $STATUS"
 
-                case "$STATUS" in
-                    Success|Failed|TimedOut|Cancelled|Undeliverable|Terminated)
-                        break
-                        ;;
-                esac
+                        case "$STATUS" in
+                            Success|Failed|TimedOut|Cancelled|Undeliverable|Terminated)
+                                break
+                                ;;
+                        esac
 
-                sleep 5
-            done
+                        sleep 5
+                    done
 
-            if [ "$STATUS" != "Success" ]; then
-                echo "Deployment did not complete successfully. Final status: $STATUS"
-                exit 1
-            fi
+                    if [ "$STATUS" != "Success" ]; then
+                        echo "Deployment failed. Final status: $STATUS"
+                        exit 1
+                    fi
 
-            /usr/local/bin/aws ssm get-command-invocation \
-              --region "$AWS_REGION" \
-              --command-id "$COMMAND_ID" \
-              --instance-id "$APP_INSTANCE_ID" \
-              --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
-              --output json
-        '''
-    }
-}
-
-
-
-      
+                    /usr/local/bin/aws ssm get-command-invocation \
+                      --region "$AWS_REGION" \
+                      --command-id "$COMMAND_ID" \
+                      --instance-id "$APP_INSTANCE_ID" \
+                      --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
+                      --output json
+                '''
+            }
+        }
 
         stage('Verify') {
             steps {
                 sh '''
                     set -eu
 
-                    curl -fsS "$HEALTH_URL" -o health.json
+                    curl -k -sS --fail --max-time 30 \
+                      "$HEALTH_URL" \
+                      -o health.json
 
                     python3.11 - <<'PY'
 import json
@@ -231,30 +226,37 @@ PY
         }
     }
 
-post {
-    always {
-        script {
-            if (!fileExists('trivy-report.json')) {
-                writeFile(
-                    file: 'trivy-report.json',
-                    text: '{"status":"scan_not_completed"}'
-                )
+    post {
+        always {
+            script {
+                if (!fileExists('trivy-report.json')) {
+                    writeFile(
+                        file: 'trivy-report.json',
+                        text: '{"status":"scan_not_completed"}'
+                    )
+                }
             }
+
+            archiveArtifacts(
+                artifacts: 'trivy-report.json',
+                allowEmptyArchive: true
+            )
         }
 
-        archiveArtifacts(
-            artifacts: 'trivy-report.json',
-            allowEmptyArchive: true
-        )
-    }
+        success {
+            echo 'CI/CD pipeline completed successfully!'
+        }
 
-    success {
-        echo 'CI/CD pipeline completed successfully!'
-    }
-
-    failure {
-        echo 'Pipeline failed. Push and deployment stages are skipped when earlier stages fail.'
+        failure {
+            echo 'Pipeline failed. Push and deployment stages are skipped when earlier stages fail.'
+        }
     }
 }
+
+
+
+          
+
+ 
 
 
