@@ -96,7 +96,7 @@ jobs:
       - test
       - build-scan
 
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: false
 
     runs-on: ubuntu-latest
 
@@ -133,12 +133,10 @@ jobs:
           docker push \
             451782721864.dkr.ecr.ap-south-1.amazonaws.com/techcake-django-app-v3:${{ github.sha }}
 
-  deploy:
+    deploy:
     name: Deploy to EC2 using AWS SSM
     needs: publish-main
-
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-
+    if: false
     runs-on: ubuntu-latest
 
     permissions:
@@ -156,7 +154,6 @@ jobs:
         run: |
           echo "Checking AWS identity..."
           aws sts get-caller-identity
-
           echo "Checking EC2 instance..."
           aws ec2 describe-instances \
             --region ap-south-1 \
