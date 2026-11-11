@@ -1,5 +1,9 @@
 
-pipeline {
+
+
+            archiveArtifacts(
+                artifacts: 'trivy-report.json',
+                allowEmptyArchive: truepipeline {
     agent any
 
     options {
@@ -155,7 +159,7 @@ PY
 
             STATUS="Pending"
 
-            for attempt in $(seq 1 60); do
+            for attempt in $(seq 1 180); do
                 STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
                   --region "$AWS_REGION" \
                   --command-id "$COMMAND_ID" \
@@ -166,7 +170,7 @@ PY
                 echo "Deployment status: $STATUS"
 
                 case "$STATUS" in
-                    Success|Failed|TimedOut|Cancelled|Cancelling|Undeliverable|Terminated)
+                    Success|Failed|TimedOut|Cancelled|Undeliverable|Terminated)
                         break
                         ;;
                 esac
@@ -174,20 +178,22 @@ PY
                 sleep 5
             done
 
+            if [ "$STATUS" != "Success" ]; then
+                echo "Deployment did not complete successfully. Final status: $STATUS"
+                exit 1
+            fi
+
             /usr/local/bin/aws ssm get-command-invocation \
               --region "$AWS_REGION" \
               --command-id "$COMMAND_ID" \
               --instance-id "$APP_INSTANCE_ID" \
               --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
               --output json
-
-            if [ "$STATUS" != "Success" ]; then
-                echo "Deployment failed."
-                exit 1
-            fi
         '''
     }
 }
+
+
 
       
 
@@ -225,24 +231,33 @@ PY
         }
     }
 
-    post {
-        always {
-            script {
-                if (!fileExists('trivy-report.json')) {
-                    writeFile(
-                        file: 'trivy-report.json',
-                        text: '{"status":"scan_not_completed"}'
-                    )
-                }
+post {
+    always {
+        script {
+            if (!fileExists('trivy-report.json')) {
+                writeFile(
+                    file: 'trivy-report.json',
+                    text: '{"status":"scan_not_completed"}'
+                )
             }
-
-            archiveArtifacts(
-                artifacts: 'trivy-report.json',
-                allowEmptyArchive: true
-            )
         }
 
-        success {
+        archiveArtifacts(
+            artifacts: 'trivy-report.json',
+            allowEmptyArchive: true
+        )
+    }
+
+    success {
+        echo 'CI/CD pipeline completed successfully!'
+    }
+
+    failure {
+        echo 'Pipeline failed. Push and deployment stages are skipped when earlier stages fail.'
+    }
+}
+
+   
             echo 'CI/CD pipeline completed successfully!'
         }
 
