@@ -123,62 +123,73 @@ PY
             }
         }
 
-        stage('Deploy') {
-            steps {
-                sh '''
-                    set -eu
+stage('Deploy') {
+    steps {
+        sh '''
+            set -eu
 
-                    echo "Deploying commit: $GIT_SHA"
+            echo "Deploying commit: $GIT_SHA"
 
-                    COMMAND_ID=$(/usr/local/bin/aws ssm send-command \
-                      --region "$AWS_REGION" \
-                      --instance-ids "$APP_INSTANCE_ID" \
-                      --document-name AWS-RunShellScript \
-                      --parameters "{\"commands\":[\"sudo /opt/django1/techcake-django-app-v2/deploy.sh $GIT_SHA\"]}" \
-                      --query 'Command.CommandId' \
-                      --output text)
+            python3.11 - <<'PY'
+import json
+import os
 
-                    echo "SSM Command ID: $COMMAND_ID"
+command = (
+    "sudo /opt/django1/techcake-django-app-v2/deploy.sh "
+    + os.environ["GIT_SHA"]
+)
 
-                    STATUS="Pending"
+with open("ssm-parameters.json", "w") as f:
+    json.dump({"commands": [command]}, f)
+PY
 
-                    for attempt in $(seq 1 60); do
-                        STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
-                          --region "$AWS_REGION" \
-                          --command-id "$COMMAND_ID" \
-                          --instance-id "$APP_INSTANCE_ID" \
-                          --query 'Status' \
-                          --output text 2>/dev/null || true)
+            COMMAND_ID=$(/usr/local/bin/aws ssm send-command \
+              --region "$AWS_REGION" \
+              --instance-ids "$APP_INSTANCE_ID" \
+              --document-name AWS-RunShellScript \
+              --parameters file://ssm-parameters.json \
+              --query 'Command.CommandId' \
+              --output text)
 
-                        echo "Deployment status: $STATUS"
+            echo "SSM Command ID: $COMMAND_ID"
 
-                        case "$STATUS" in
-                            Success)
-                                break
-                                ;;
-                            Failed|TimedOut|Cancelled|Cancelling|Undeliverable|Terminated)
-                                echo "Deployment command failed."
-                                break
-                                ;;
-                        esac
+            STATUS="Pending"
 
-                        sleep 5
-                    done
+            for attempt in $(seq 1 60); do
+                STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
+                  --region "$AWS_REGION" \
+                  --command-id "$COMMAND_ID" \
+                  --instance-id "$APP_INSTANCE_ID" \
+                  --query 'Status' \
+                  --output text 2>/dev/null || true)
 
-                    /usr/local/bin/aws ssm get-command-invocation \
-                      --region "$AWS_REGION" \
-                      --command-id "$COMMAND_ID" \
-                      --instance-id "$APP_INSTANCE_ID" \
-                      --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
-                      --output json
+                echo "Deployment status: $STATUS"
 
-                    if [ "$STATUS" != "Success" ]; then
-                        echo "Deployment did not succeed."
-                        exit 1
-                    fi
-                '''
-            }
-        }
+                case "$STATUS" in
+                    Success|Failed|TimedOut|Cancelled|Cancelling|Undeliverable|Terminated)
+                        break
+                        ;;
+                esac
+
+                sleep 5
+            done
+
+            /usr/local/bin/aws ssm get-command-invocation \
+              --region "$AWS_REGION" \
+              --command-id "$COMMAND_ID" \
+              --instance-id "$APP_INSTANCE_ID" \
+              --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
+              --output json
+
+            if [ "$STATUS" != "Success" ]; then
+                echo "Deployment failed."
+                exit 1
+            fi
+        '''
+    }
+}
+
+      
 
         stage('Verify') {
             steps {
