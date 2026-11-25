@@ -1,4 +1,4 @@
-#!/bin/bash
+ #!/bin/bash
 set -e
 
 APP_DIR="/opt/techcake-app"
@@ -21,11 +21,21 @@ echo "Expected deployed SHA: $EXPECTED_SHA"
 for i in $(seq 1 30); do
     RESPONSE=$(curl -sS --fail http://127.0.0.1:8000/health || true)
 
-    if [ -n "$RESPONSE" ] && echo "$RESPONSE" | grep -Fq "$EXPECTED_SHA"; then
-        echo "Validation successful!"
-        echo "Health response: $RESPONSE"
-        echo "Verified SHA: $EXPECTED_SHA"
-        exit 0
+    if [ -n "$RESPONSE" ]; then
+        ACTUAL_SHA=$(echo "$RESPONSE" | python3 -c '
+import json, sys
+try:
+    print(json.load(sys.stdin).get("version", ""))
+except Exception:
+    print("")
+' 2>/dev/null || true)
+
+        if [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ]; then
+            echo "Validation successful!"
+            echo "Health response: $RESPONSE"
+            echo "Verified SHA: $ACTUAL_SHA"
+            exit 0
+        fi
     fi
 
     echo "Waiting for health check and SHA verification ($i/30)..."
