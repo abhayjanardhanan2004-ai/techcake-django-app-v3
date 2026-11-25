@@ -1,4 +1,3 @@
-
 version: 0.0
 os: linux
 
@@ -7,24 +6,21 @@ files:
     destination: /opt/techcake-app
 
 permissions:
-  - object: /opt/techcake-app
-    pattern: "**"
+  - object: /opt/techcake-app/deploy
+    pattern: "*.sh"
     owner: root
     group: root
     mode: 755
+    type:
+      - file
 
 hooks:
-  ApplicationStop:
-    - location: deploy/stop.sh
-      timeout: 60
-      runas: root
-
   BeforeInstall:
     - location: deploy/install.sh
       timeout: 120
       runas: root
 
-  AfterInstall:
+  ApplicationStart:
     - location: deploy/start.sh
       timeout: 300
       runas: root
@@ -33,3 +29,5 @@ hooks:
     - location: deploy/validate.sh
       timeout: 180
       runas: root
+
+
