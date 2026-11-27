@@ -124,71 +124,68 @@ PY
             }
         }
 
-        stage('Deploy') {
-            steps {
-                sh '''
-                    set -eu
+     stage('Deploy') {
+    steps {
+        sh '''
+            set -eu
 
-                    echo "Deploying commit: $GIT_SHA"
+            echo "Preparing CodeDeploy revision for: $GIT_SHA"
 
-                    python3.11 - <<'PY'
-import json
-import os
+            cat > deploy/image.env <<EOF
+IMAGE_URI=$IMAGE_URI:$GIT_SHA
+EXPECTED_SHA=$GIT_SHA
+EOF
 
-command = (
-    "sudo /opt/django1/techcake-django-app-v2/deploy.sh "
-    + os.environ["GIT_SHA"]
-)
+            rm -f codedeploy-revision.zip
 
-with open("ssm-parameters.json", "w") as f:
-    json.dump({"commands": [command]}, f)
-PY
+            zip -r codedeploy-revision.zip appspec.yml deploy/
 
-                    COMMAND_ID=$(/usr/local/bin/aws ssm send-command \
-                      --region "$AWS_REGION" \
-                      --instance-ids "$APP_INSTANCE_ID" \
-                      --document-name AWS-RunShellScript \
-                      --parameters file://ssm-parameters.json \
-                      --query 'Command.CommandId' \
-                      --output text)
+            S3_KEY="revisions/${GIT_SHA}.zip"
 
-                    echo "SSM Command ID: $COMMAND_ID"
+            /usr/local/bin/aws s3 cp codedeploy-revision.zip \
+              "s3://techcake-codedeploy-artifacts-451782721864-ap-south-1/$S3_KEY" \
+              --region "$AWS_REGION"
 
-                    STATUS="Pending"
+          DEPLOYMENT_ID=$(/usr/local/bin/aws deploy create-deployment \
+              --application-name techcake-django-app-v3 \
+              --deployment-group-name techcake-production-blue-green \
+              --deployment-config-name CodeDeployDefault.AllAtOnce \
+              --s3-location bucket=techcake-codedeploy-artifacts-451782721864-ap-south-1,key="$S3_KEY",bundleType=zip \
+              --description "Jenkins Blue-Green deployment $GIT_SHA" \
+              --region "$AWS_REGION" \
+              --query 'deploymentId' \
+              --output text)
 
-                    for attempt in $(seq 1 180); do
-                        STATUS=$(/usr/local/bin/aws ssm get-command-invocation \
-                          --region "$AWS_REGION" \
-                          --command-id "$COMMAND_ID" \
-                          --instance-id "$APP_INSTANCE_ID" \
-                          --query 'Status' \
-                          --output text 2>/dev/null || true)
+            echo "Deployment ID: $DEPLOYMENT_ID"
 
-                        echo "Deployment status: $STATUS"
+            for attempt in $(seq 1 180); do
+               STATUS=$(/usr/local/bin/aws deploy get-deployment \
+                  --deployment-id "$DEPLOYMENT_ID" \
+                  --region "$AWS_REGION" \
+                  --query 'deploymentInfo.status' \
+                  --output text)
 
-                        case "$STATUS" in
-                            Success|Failed|TimedOut|Cancelled|Undeliverable|Terminated)
-                                break
-                                ;;
-                        esac
+                echo "CodeDeploy status: $STATUS"
 
-                        sleep 5
-                    done
-
-                    if [ "$STATUS" != "Success" ]; then
-                        echo "Deployment failed. Final status: $STATUS"
+                case "$STATUS" in
+                    Succeeded)
+                        echo "Blue-Green deployment succeeded!"
+                        exit 0
+                        ;;
+                    Failed|Stopped)
+                        echo "Deployment ended with status: $STATUS"
                         exit 1
-                    fi
+                        ;;
+                esac
 
-                    /usr/local/bin/aws ssm get-command-invocation \
-                      --region "$AWS_REGION" \
-                      --command-id "$COMMAND_ID" \
-                      --instance-id "$APP_INSTANCE_ID" \
-                      --query '{Status:Status,Output:StandardOutputContent,Error:StandardErrorContent}' \
-                      --output json
-                '''
-            }
-        }
+                sleep 10
+            done
+
+            echo "Timed out waiting for CodeDeploy."
+            exit 1
+        '''
+    }
+}
 
         stage('Verify') {
             steps {
